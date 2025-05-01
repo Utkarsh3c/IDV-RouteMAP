@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Workout Heatmap (Year Filter + Temporal Controls)</title>
+  <title>Workout Heatmap (Filters + Temporal Controls)</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <style>
     html, body { margin:0; height:100%; }
     #map { position:absolute; top:0; bottom:0; width:100%; }
 
-    /* Year filter dropdown */
-    #year-filter {
+    /* Filter controls */
+    #filter-controls {
       position: absolute;
       top: 10px; right: 10px;
       background: rgba(255,255,255,0.9);
@@ -19,7 +19,11 @@
       z-index: 1000;
       border-radius: 4px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      display: flex;
+      gap: 8px;
+      align-items: center;
     }
+    #filter-controls label { margin-right:4px; }
 
     /* Slide-out panel */
     #panel {
@@ -86,11 +90,17 @@
 
   <div id="map"></div>
 
-  <!-- Year filter control -->
-  <div id="year-filter">
+  <!-- Year + Type filter controls -->
+  <div id="filter-controls">
     <label for="year-select">Year:</label>
     <select id="year-select">
       <option value="all">All</option>
+    </select>
+    <label for="type-select">Type:</label>
+    <select id="type-select">
+      <option value="all">All</option>
+      <option value="Running">Running</option>
+      <option value="Biking">Biking</option>
     </select>
   </div>
 
@@ -114,8 +124,8 @@
       <option value="500">2×</option>
       <option value="250">4×</option>
       <option value="125">8×</option>
-      <option value="100">10x</option>
-      <option value="10">100x</option>
+      <option value="100">10×</option>
+      <option value="10">100×</option>
     </select>
     <button id="hide-slider-btn" title="Hide slider">✕</button>
   </div>
@@ -156,38 +166,50 @@
         o.value=y; o.textContent=y;
         yearSelect.appendChild(o);
       });
-      yearSelect.addEventListener('change', () => {
-        const yr = yearSelect.value;
+
+      // 2) Wire up Year & Type filters
+      const typeSelect = document.getElementById('type-select');
+      function applyYearTypeFilter() {
+        const yr   = yearSelect.value;
+        const type = typeSelect.value;
         segmentsLayer.clearLayers();
         const filtered = allRoutes.features.filter(f => {
-          if (yr==='all') return true;
+          // year filter
           const m = indexData.find(a=>a.activityId===f.properties.activityId);
-          return m && new Date(m.start_time).getFullYear().toString()===yr;
+          if (!m) return false;
+          if (yr!=='all' && new Date(m.start_time).getFullYear().toString()!==yr) return false;
+          // type filter
+          if (type!=='all' && m.sport!==type) return false;
+          return true;
         });
         segmentsLayer.addData(filtered);
         if (filtered.length) {
-          map.fitBounds(L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
-                       {padding:[20,20]});
+          map.fitBounds(
+            L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
+            {padding:[20,20]}
+          );
         }
-      });
+      }
+      yearSelect.addEventListener('change', applyYearTypeFilter);
+      typeSelect.addEventListener('change', applyYearTypeFilter);
 
-      // 2) Prepare Times array
+      // 3) Prepare Times array
       times = indexData
         .map(a=>new Date(a.start_time).getTime())
         .sort((a,b)=>a-b);
 
-      // 3) Initialize map
+      // 4) Initialize map
       map = L.map('map').setView([1.35,103.82],12);
       L.tileLayer(
         'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
         { attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:19 }
       ).addTo(map);
 
-      // 4) Draw all segments
+      // 5) Draw all segments initially
       segmentsLayer = L.geoJSON(allRoutes, { style:styleBySport }).addTo(map);
       initialBounds = segmentsLayer.getBounds();
 
-      // 5) Wire up temporal controls
+      // 6) Wire up temporal controls
       const slider      = document.getElementById('time-slider');
       const label       = document.getElementById('time-label');
       const playBtn     = document.getElementById('play-btn');
@@ -199,18 +221,29 @@
       slider.max = times.length - 1;
 
       slider.addEventListener('input', () => {
-        const idx = +slider.value;
+        const idx    = +slider.value;
         const cutoff = times[idx];
         label.textContent = new Date(cutoff).toLocaleDateString();
+
+        // filter by time + year + type
+        const yr   = yearSelect.value;
+        const type = typeSelect.value;
         const filtered = allRoutes.features.filter(f => {
           const m = indexData.find(a=>a.activityId===f.properties.activityId);
-          return m && new Date(m.start_time).getTime() <= cutoff;
+          if (!m) return false;
+          if (new Date(m.start_time).getTime() > cutoff) return false;
+          if (yr!=='all' && new Date(m.start_time).getFullYear().toString()!==yr) return false;
+          if (type!=='all' && m.sport!==type) return false;
+          return true;
         });
+
         segmentsLayer.clearLayers();
         segmentsLayer.addData(filtered);
         if (filtered.length) {
-          map.fitBounds(L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
-                       {padding:[20,20]});
+          map.fitBounds(
+            L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
+            {padding:[20,20]}
+          );
         }
       });
 
@@ -245,7 +278,7 @@
         showBtn.style.display='none';
       });
 
-      // 6) Proximity-click to open panel
+      // 7) Proximity-click to open panel
       map.on('click', e => {
         const pt = turf.point([e.latlng.lng,e.latlng.lat]);
         const buf= turf.buffer(pt,5,{units:'meters'});
@@ -289,8 +322,7 @@
       segmentsLayer.addData(feat);
       map.fitBounds(L.geoJSON(feat).getBounds(),{padding:[20,20]});
       const c=document.getElementById('activity-list');
-      c.innerHTML=`
-        <div class="activity-item">
+      c.innerHTML=`<div class="activity-item">
           <h3>${new Date(act.start_time).toLocaleString()}</h3>
           <p><strong>Sport:</strong> ${act.sport}</p>
           <p><strong>Distance:</strong> ${(act.distance_m/1000).toFixed(1)} km</p>
@@ -307,9 +339,16 @@
           <p><strong>Cadence:</strong> ${act.cadence||'–'} spm</p>
           <p><strong>Calories:</strong> ${act.calories||'–'} kcal</p>
         </div>
-        <button id="show-all-btn">Show All Routes</button>
-      `;
-      document.getElementById('show-all-btn').onclick=showAllRoutes;
+        <div style="display:flex; gap:8px; padding:1rem;">
+          <button id="back-btn" style="flex:1;padding:.5rem;background:#ccc;border:none;border-radius:4px;cursor:pointer;">
+            ← Back
+          </button>
+          <button id="show-all-btn" style="flex:1;padding:.5rem;background:#007bff;color:#fff;border:none;border-radius:4px;cursor:pointer;">
+            Show All
+          </button>
+        </div>`;
+      document.getElementById('back-btn').onclick = () => showActivitiesList(currentActivities);
+      document.getElementById('show-all-btn').onclick = showAllRoutes;
       togglePanel(true);
     }
     function showAllRoutes(){
