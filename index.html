@@ -2,26 +2,30 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Workout Heatmap (Filters + Temporal Controls)</title>
+  <title>Workout Heatmap (Dynamic Summary)</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <style>
     html, body { margin:0; height:100%; }
     #map { position:absolute; top:0; bottom:0; width:100%; }
 
-    /* Filter controls */
+    /* Summary box */
+    #summary {
+      position:absolute; top:10px; left:10px;
+      background:rgba(255,255,255,0.9);
+      padding:8px 12px; font-family:sans-serif; font-size:13px;
+      z-index:1000; border-radius:4px;
+      box-shadow:0 1px 4px rgba(0,0,0,0.3);
+      max-width:200px;
+    }
+    #summary strong { display:block; margin-bottom:4px; }
+
+    /* Year + Type filters */
     #filter-controls {
-      position: absolute;
-      top: 10px; right: 10px;
-      background: rgba(255,255,255,0.9);
-      padding: 6px 10px;
-      font-family: sans-serif;
-      font-size: 13px;
-      z-index: 1000;
-      border-radius: 4px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-      display: flex;
-      gap: 8px;
-      align-items: center;
+      position:absolute; top:10px; right:10px;
+      background:rgba(255,255,255,0.9);
+      padding:6px 10px; font-family:sans-serif; font-size:13px;
+      z-index:1000; border-radius:4px; box-shadow:0 1px 4px rgba(0,0,0,0.3);
+      display:flex; gap:8px; align-items:center;
     }
     #filter-controls label { margin-right:4px; }
 
@@ -30,8 +34,8 @@
       position:absolute; top:0; right:-320px;
       width:320px; height:100%; background:#fff;
       box-shadow:-2px 0 8px rgba(0,0,0,0.15);
-      transition:right 0.3s; overflow-y:auto;
-      font-family:sans-serif; z-index:1000;
+      transition:right 0.3s; overflow-y:auto; font-family:sans-serif;
+      z-index:1000;
     }
     #panel.open { right:0; }
     #panel header {
@@ -48,41 +52,43 @@
     }
     .activity-item h3 { margin:0 0 .25rem; font-size:1rem; }
     .activity-item p  { margin:0; font-size:.9rem; color:#555; }
-    #show-all-btn {
-      display:block; margin:1rem auto;
-      padding:.5rem 1rem; background:#007bff;
-      color:#fff; border:none; border-radius:4px; cursor:pointer;
+
+    /* Consistent detail buttons */
+    .detail-buttons {
+      display:flex; gap:8px; padding:1rem;
     }
-    #show-all-btn:hover { background:#0056b3; }
+    .detail-buttons button {
+      flex:1; padding:.5rem; border:none; border-radius:4px;
+      cursor:pointer; font-size:.9rem;
+    }
+    .detail-buttons .btn-back { background:#ccc; }
+    .detail-buttons .btn-show-all {
+      background:#007bff; color:#fff;
+    }
+    .detail-buttons .btn-show-all:hover { background:#0056b3; }
 
     /* Time slider + play + speed + hide */
     #time-slider-container {
-      position: absolute;
-      bottom: 10px; left: 50%;
-      transform: translateX(-50%);
-      background: rgba(255,255,255,0.9);
-      padding: 6px 12px;
-      border-radius: 4px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-      font-family: sans-serif;
-      display: flex; align-items: center; gap: 8px;
-      z-index: 1000;
+      position:absolute; bottom:10px; left:50%;
+      transform:translateX(-50%);
+      background:rgba(255,255,255,0.9);
+      padding:6px 12px; border-radius:4px;
+      box-shadow:0 1px 4px rgba(0,0,0,0.3);
+      display:flex; align-items:center; gap:8px;
+      font-family:sans-serif; z-index:1000;
     }
     #play-btn, #hide-slider-btn {
-      background: none; border: none; font-size:1.2rem; cursor:pointer;
+      background:none; border:none; font-size:1.2rem; cursor:pointer;
     }
-    #time-slider { width: 200px; }
+    #time-slider { width:200px; }
     #time-label { font-size:.9rem; min-width:60px; text-align:center; }
     #speed-select { font-size:.9rem; }
-    /* Show-slider button */
     #show-slider-btn {
-      display:none;
-      position: absolute; bottom:10px; left:50%;
-      transform:translateX(-50%);
-      padding:.5rem; font-size:1rem; z-index:1000;
-      background: rgba(255,255,255,0.9);
-      border-radius:4px; box-shadow:0 1px 4px rgba(0,0,0,0.3);
-      cursor: pointer;
+      display:none; position:absolute; bottom:10px; left:50%;
+      transform:translateX(-50%); padding:.5rem; font-size:1rem;
+      background:rgba(255,255,255,0.9); border-radius:4px;
+      box-shadow:0 1px 4px rgba(0,0,0,0.3); cursor:pointer;
+      z-index:1000;
     }
   </style>
 </head>
@@ -90,12 +96,17 @@
 
   <div id="map"></div>
 
-  <!-- Year + Type filter controls -->
+  <!-- Summary -->
+  <div id="summary">
+    <strong>Summary</strong>
+    <div id="summary-total"></div>
+    <div id="summary-per-year" style="margin-top:6px;"></div>
+  </div>
+
+  <!-- Year + Type filters -->
   <div id="filter-controls">
     <label for="year-select">Year:</label>
-    <select id="year-select">
-      <option value="all">All</option>
-    </select>
+    <select id="year-select"><option value="all">All</option></select>
     <label for="type-select">Type:</label>
     <select id="type-select">
       <option value="all">All</option>
@@ -113,7 +124,7 @@
     <div id="activity-list"></div>
   </div>
 
-  <!-- Time slider + play + speed + hide -->
+  <!-- Time slider + controls -->
   <div id="time-slider-container">
     <button id="play-btn">▶️</button>
     <input type="range" id="time-slider" min="0" max="0" step="1" value="0"/>
@@ -138,15 +149,36 @@
   <script>
     let allRoutes, indexData, segmentsLayer, map, initialBounds;
     let times = [], playInterval = null;
+    let currentActivities = [];
 
-    // Style by sport
+    // Summary updater
+    function updateSummary(metaArray) {
+      // Total
+      const totalCount = metaArray.length;
+      const totalKm    = (metaArray.reduce((sum,a) => sum + (a.distance_m||0),0)/1000).toFixed(1);
+      document.getElementById('summary-total').innerHTML =
+        `${totalCount} activities<br/>${totalKm} km`;
+
+      // Per-year
+      const perYear = {};
+      metaArray.forEach(a => {
+        const y = new Date(a.start_time).getFullYear();
+        perYear[y] = perYear[y]||{count:0,dist:0};
+        perYear[y].count++;
+        perYear[y].dist += (a.distance_m||0);
+      });
+      document.getElementById('summary-per-year').innerHTML =
+        Object.entries(perYear)
+          .sort((a,b)=>b[0]-a[0])
+          .map(([y,s]) => `${y}: ${s.count} ▪ ${(s.dist/1000).toFixed(1)} km`)
+          .join('<br/>');
+    }
+
     function styleBySport(feature) {
-      const meta = indexData.find(a=>a.activityId===feature.properties.activityId) || {};
-      if (meta.sport==='Biking'||meta.sport==='Cycling')
-        return { color:'#e31a1c', weight:4, opacity:0.8 };
-      if (meta.sport==='Running')
-        return { color:'#1f78b4', weight:4, opacity:0.8 };
-      return { color:'#888', weight:4, opacity:0.8 };
+      const m = indexData.find(a=>a.activityId===feature.properties.activityId)||{};
+      if (m.sport==='Biking'||m.sport==='Cycling') return {color:'#e31a1c',weight:4,opacity:0.8};
+      if (m.sport==='Running')                return {color:'#1f78b4',weight:4,opacity:0.8};
+      return {color:'#888',weight:4,opacity:0.8};
     }
 
     Promise.all([
@@ -156,139 +188,119 @@
       allRoutes = routes;
       indexData = idx;
 
-      // 1) Populate Year filter
-      const years = [...new Set(indexData.map(a=>
-        new Date(a.start_time).getFullYear()
-      ))].sort();
-      const yearSelect = document.getElementById('year-select');
+      // Initial summary (all data)
+      updateSummary(indexData);
+
+      // Populate Year dropdown
+      const years = [...new Set(indexData.map(a=>new Date(a.start_time).getFullYear()))].sort();
+      const yearSel = document.getElementById('year-select');
       years.forEach(y=>{
-        const o = document.createElement('option');
-        o.value=y; o.textContent=y;
-        yearSelect.appendChild(o);
+        const o = document.createElement('option'); o.value=y; o.textContent=y;
+        yearSel.appendChild(o);
       });
 
-      // 2) Wire up Year & Type filters
-      const typeSelect = document.getElementById('type-select');
-      function applyYearTypeFilter() {
-        const yr   = yearSelect.value;
-        const type = typeSelect.value;
-        segmentsLayer.clearLayers();
-        const filtered = allRoutes.features.filter(f => {
-          // year filter
-          const m = indexData.find(a=>a.activityId===f.properties.activityId);
-          if (!m) return false;
-          if (yr!=='all' && new Date(m.start_time).getFullYear().toString()!==yr) return false;
-          // type filter
-          if (type!=='all' && m.sport!==type) return false;
+      // Filter logic (year + type + time)
+      const typeSel = document.getElementById('type-select');
+      function applyFilters(cutoffTime = Infinity) {
+        const yr   = yearSel.value;
+        const type = typeSel.value;
+        // Filter metadata
+        const visibleMeta = indexData.filter(a => {
+          const t = new Date(a.start_time).getTime();
+          if (t>cutoffTime) return false;
+          if (yr!=='all' && new Date(a.start_time).getFullYear().toString()!==yr) return false;
+          if (type!=='all' && a.sport!==type) return false;
           return true;
         });
-        segmentsLayer.addData(filtered);
-        if (filtered.length) {
-          map.fitBounds(
-            L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
-            {padding:[20,20]}
-          );
+        // Update summary
+        updateSummary(visibleMeta);
+        // Draw those segments
+        segmentsLayer.clearLayers();
+        const feats = visibleMeta.map(a =>
+          allRoutes.features.find(f=>f.properties.activityId===a.activityId)
+        ).filter(f=>f);
+        segmentsLayer.addData(feats);
+        if (feats.length) {
+          map.fitBounds(L.geoJSON({type:'FeatureCollection',features:feats}).getBounds(),
+                       {padding:[20,20]});
         }
       }
-      yearSelect.addEventListener('change', applyYearTypeFilter);
-      typeSelect.addEventListener('change', applyYearTypeFilter);
 
-      // 3) Prepare Times array
-      times = indexData
-        .map(a=>new Date(a.start_time).getTime())
-        .sort((a,b)=>a-b);
-
-      // 4) Initialize map
+      // Init map
       map = L.map('map').setView([1.35,103.82],12);
       L.tileLayer(
         'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        { attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:19 }
+        { attribution:'© OSM © CARTO', subdomains:'abcd', maxZoom:19 }
       ).addTo(map);
 
-      // 5) Draw all segments initially
-      segmentsLayer = L.geoJSON(allRoutes, { style:styleBySport }).addTo(map);
+      // Draw all segments initially
+      segmentsLayer = L.geoJSON(allRoutes,{style:styleBySport}).addTo(map);
       initialBounds = segmentsLayer.getBounds();
 
-      // 6) Wire up temporal controls
+      // Wire filters
+      yearSel.addEventListener('change', ()=> applyFilters(+Infinity));
+      typeSel.addEventListener('change', ()=> applyFilters(+Infinity));
+
+      // Prepare times
+      times = indexData.map(a=>new Date(a.start_time).getTime()).sort((a,b)=>a-b);
+
+      // Temporal controls
       const slider      = document.getElementById('time-slider');
       const label       = document.getElementById('time-label');
       const playBtn     = document.getElementById('play-btn');
-      const speedSelect = document.getElementById('speed-select');
+      const speedSel    = document.getElementById('speed-select');
       const hideBtn     = document.getElementById('hide-slider-btn');
       const showBtn     = document.getElementById('show-slider-btn');
       const container   = document.getElementById('time-slider-container');
 
       slider.max = times.length - 1;
-
-      slider.addEventListener('input', () => {
+      slider.addEventListener('input', ()=>{
         const idx    = +slider.value;
         const cutoff = times[idx];
         label.textContent = new Date(cutoff).toLocaleDateString();
-
-        // filter by time + year + type
-        const yr   = yearSelect.value;
-        const type = typeSelect.value;
-        const filtered = allRoutes.features.filter(f => {
-          const m = indexData.find(a=>a.activityId===f.properties.activityId);
-          if (!m) return false;
-          if (new Date(m.start_time).getTime() > cutoff) return false;
-          if (yr!=='all' && new Date(m.start_time).getFullYear().toString()!==yr) return false;
-          if (type!=='all' && m.sport!==type) return false;
-          return true;
-        });
-
-        segmentsLayer.clearLayers();
-        segmentsLayer.addData(filtered);
-        if (filtered.length) {
-          map.fitBounds(
-            L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
-            {padding:[20,20]}
-          );
-        }
+        applyFilters(cutoff);
       });
 
-      playBtn.addEventListener('click', () => {
+      playBtn.addEventListener('click', ()=>{
         if (playInterval) {
-          clearInterval(playInterval);
-          playInterval = null;
-          playBtn.textContent='▶️';
+          clearInterval(playInterval); playInterval=null; playBtn.textContent='▶️';
         } else {
           playBtn.textContent='⏸️';
-          const delay = +speedSelect.value;
+          const delay = +speedSel.value;
           playInterval = setInterval(()=>{
-            let v=+slider.value;
-            if (v<+slider.max) {
-              slider.value=++v;
+            let v = +slider.value;
+            if (v < +slider.max) {
+              slider.value = ++v;
               slider.dispatchEvent(new Event('input'));
             } else {
               clearInterval(playInterval);
-              playInterval=null;
+              playInterval = null;
               playBtn.textContent='▶️';
             }
           }, delay);
         }
       });
 
-      hideBtn.addEventListener('click', () => {
+      hideBtn.addEventListener('click', ()=>{
         container.style.display='none';
         showBtn.style.display='block';
       });
-      showBtn.addEventListener('click', () => {
+      showBtn.addEventListener('click', ()=>{
         container.style.display='flex';
         showBtn.style.display='none';
       });
 
-      // 7) Proximity-click to open panel
-      map.on('click', e => {
-        const pt = turf.point([e.latlng.lng,e.latlng.lat]);
-        const buf= turf.buffer(pt,5,{units:'meters'});
-        const ids=[...new Set(
+      // Proximity-click panel
+      map.on('click', e=>{
+        const pt  = turf.point([e.latlng.lng,e.latlng.lat]);
+        const buf = turf.buffer(pt,5,{units:'meters'});
+        const ids = [...new Set(
           allRoutes.features
             .filter(f=>turf.booleanIntersects(buf,turf.lineString(f.geometry.coordinates)))
             .map(f=>f.properties.activityId)
         )];
-        if (ids.length) {
-          const acts=ids.map(i=>indexData.find(a=>a.activityId===i)).filter(a=>a);
+        if(ids.length){
+          const acts = ids.map(i=>indexData.find(a=>a.activityId===i)).filter(a=>a);
           showActivitiesList(acts);
         }
       });
@@ -297,11 +309,13 @@
 
     // Panel functions
     function togglePanel(open){
-      document.getElementById('panel').classList.toggle('open', open);
+      document.getElementById('panel').classList.toggle('open',open);
     }
+
     function showActivitiesList(list){
-      const c=document.getElementById('activity-list');
-      c.innerHTML='';
+      currentActivities = list;
+      const c = document.getElementById('activity-list');
+      c.innerHTML = '';
       list.forEach(a=>{
         const date=new Date(a.start_time).toLocaleDateString();
         const km=(a.distance_m/1000).toFixed(1);
@@ -314,15 +328,19 @@
       });
       togglePanel(true);
     }
+
     function showActivityDetails(id){
       const feat=allRoutes.features.find(f=>f.properties.activityId===id);
       const act =indexData.find(a=>a.activityId===id);
-      if(!feat||!act)return;
+      if(!feat||!act) return;
+
       segmentsLayer.clearLayers();
       segmentsLayer.addData(feat);
       map.fitBounds(L.geoJSON(feat).getBounds(),{padding:[20,20]});
-      const c=document.getElementById('activity-list');
-      c.innerHTML=`<div class="activity-item">
+
+      const c = document.getElementById('activity-list');
+      c.innerHTML = `
+        <div class="activity-item">
           <h3>${new Date(act.start_time).toLocaleString()}</h3>
           <p><strong>Sport:</strong> ${act.sport}</p>
           <p><strong>Distance:</strong> ${(act.distance_m/1000).toFixed(1)} km</p>
@@ -339,18 +357,16 @@
           <p><strong>Cadence:</strong> ${act.cadence||'–'} spm</p>
           <p><strong>Calories:</strong> ${act.calories||'–'} kcal</p>
         </div>
-        <div style="display:flex; gap:8px; padding:1rem;">
-          <button id="back-btn" style="flex:1;padding:.5rem;background:#ccc;border:none;border-radius:4px;cursor:pointer;">
-            ← Back
-          </button>
-          <button id="show-all-btn" style="flex:1;padding:.5rem;background:#007bff;color:#fff;border:none;border-radius:4px;cursor:pointer;">
-            Show All
-          </button>
-        </div>`;
-      document.getElementById('back-btn').onclick = () => showActivitiesList(currentActivities);
+        <div class="detail-buttons">
+          <button class="btn-back" id="back-btn">← Back</button>
+          <button class="btn-show-all" id="show-all-btn">Show All</button>
+        </div>
+      `;
+      document.getElementById('back-btn').onclick     = () => showActivitiesList(currentActivities);
       document.getElementById('show-all-btn').onclick = showAllRoutes;
       togglePanel(true);
     }
+
     function showAllRoutes(){
       segmentsLayer.clearLayers();
       segmentsLayer.addData(allRoutes);
