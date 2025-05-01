@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Workout Heatmap (Year Filter + Temporal Controls)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    html, body { margin:0; height:100%; }
+    #map { position:absolute; top:0; bottom:0; width:100%; }
+
+    /* Year filter dropdown */
+    #year-filter {
+      position: absolute;
+      top: 10px; right: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 6px 10px;
+      font-family: sans-serif;
+      font-size: 13px;
+      z-index: 1000;
+      border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+
+    /* Slide-out panel */
+    #panel {
+      position:absolute; top:0; right:-320px;
+      width:320px; height:100%; background:#fff;
+      box-shadow:-2px 0 8px rgba(0,0,0,0.15);
+      transition:right 0.3s; overflow-y:auto;
+      font-family:sans-serif; z-index:1000;
+    }
+    #panel.open { right:0; }
+    #panel header {
+      position:sticky; top:0; background:#f7f7f7;
+      padding:1rem; border-bottom:1px solid #ddd;
+    }
+    #panel header .close {
+      position:absolute; top:1rem; right:1rem; cursor:pointer;
+      font-size:1.2rem;
+    }
+    .activity-item {
+      padding:.75rem 1rem; border-bottom:1px solid #eee;
+      cursor:pointer;
+    }
+    .activity-item h3 { margin:0 0 .25rem; font-size:1rem; }
+    .activity-item p  { margin:0; font-size:.9rem; color:#555; }
+    #show-all-btn {
+      display:block; margin:1rem auto;
+      padding:.5rem 1rem; background:#007bff;
+      color:#fff; border:none; border-radius:4px; cursor:pointer;
+    }
+    #show-all-btn:hover { background:#0056b3; }
+
+    /* Time slider + play + speed + hide */
+    #time-slider-container {
+      position: absolute;
+      bottom: 10px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255,255,255,0.9);
+      padding: 6px 12px;
+      border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      font-family: sans-serif;
+      display: flex; align-items: center; gap: 8px;
+      z-index: 1000;
+    }
+    #play-btn, #hide-slider-btn {
+      background: none; border: none; font-size:1.2rem; cursor:pointer;
+    }
+    #time-slider { width: 200px; }
+    #time-label { font-size:.9rem; min-width:60px; text-align:center; }
+    #speed-select { font-size:.9rem; }
+    /* Show-slider button */
+    #show-slider-btn {
+      display:none;
+      position: absolute; bottom:10px; left:50%;
+      transform:translateX(-50%);
+      padding:.5rem; font-size:1rem; z-index:1000;
+      background: rgba(255,255,255,0.9);
+      border-radius:4px; box-shadow:0 1px 4px rgba(0,0,0,0.3);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+
+  <!-- Year filter control -->
+  <div id="year-filter">
+    <label for="year-select">Year:</label>
+    <select id="year-select">
+      <option value="all">All</option>
+    </select>
+  </div>
+
+  <!-- Slide-out panel -->
+  <div id="panel">
+    <header>
+      <h2>Segment Activities</h2>
+      <span class="close" onclick="showAllRoutes()">✕</span>
+    </header>
+    <div id="activity-list"></div>
+  </div>
+
+  <!-- Time slider + play + speed + hide -->
+  <div id="time-slider-container">
+    <button id="play-btn">▶️</button>
+    <input type="range" id="time-slider" min="0" max="0" step="1" value="0"/>
+    <span id="time-label"></span>
+    <label for="speed-select" style="font-size:.9rem;">Speed:</label>
+    <select id="speed-select">
+      <option value="1000">1×</option>
+      <option value="500">2×</option>
+      <option value="250">4×</option>
+      <option value="125">8×</option>
+    </select>
+    <button id="hide-slider-btn" title="Hide slider">✕</button>
+  </div>
+  <button id="show-slider-btn" title="Show slider">⏱️</button>
+
+  <!-- Libraries -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+
+  <script>
+    let allRoutes, indexData, segmentsLayer, map, initialBounds;
+    let times = [], playInterval = null;
+
+    // Style by sport
+    function styleBySport(feature) {
+      const meta = indexData.find(a=>a.activityId===feature.properties.activityId) || {};
+      if (meta.sport==='Biking'||meta.sport==='Cycling')
+        return { color:'#e31a1c', weight:4, opacity:0.8 };
+      if (meta.sport==='Running')
+        return { color:'#1f78b4', weight:4, opacity:0.8 };
+      return { color:'#888', weight:4, opacity:0.8 };
+    }
+
+    Promise.all([
+      fetch('segments.geojson').then(r=>r.json()),
+      fetch('activity_index.json').then(r=>r.json())
+    ]).then(([routes, idx])=>{
+      allRoutes = routes;
+      indexData = idx;
+
+      // 1) Populate Year filter
+      const years = [...new Set(indexData.map(a=>
+        new Date(a.start_time).getFullYear()
+      ))].sort();
+      const yearSelect = document.getElementById('year-select');
+      years.forEach(y=>{
+        const o = document.createElement('option');
+        o.value=y; o.textContent=y;
+        yearSelect.appendChild(o);
+      });
+      yearSelect.addEventListener('change', () => {
+        const yr = yearSelect.value;
+        segmentsLayer.clearLayers();
+        const filtered = allRoutes.features.filter(f => {
+          if (yr==='all') return true;
+          const m = indexData.find(a=>a.activityId===f.properties.activityId);
+          return m && new Date(m.start_time).getFullYear().toString()===yr;
+        });
+        segmentsLayer.addData(filtered);
+        if (filtered.length) {
+          map.fitBounds(L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
+                       {padding:[20,20]});
+        }
+      });
+
+      // 2) Prepare Times array
+      times = indexData
+        .map(a=>new Date(a.start_time).getTime())
+        .sort((a,b)=>a-b);
+
+      // 3) Initialize map
+      map = L.map('map').setView([1.35,103.82],12);
+      L.tileLayer(
+        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        { attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:19 }
+      ).addTo(map);
+
+      // 4) Draw all segments
+      segmentsLayer = L.geoJSON(allRoutes, { style:styleBySport }).addTo(map);
+      initialBounds = segmentsLayer.getBounds();
+
+      // 5) Wire up temporal controls
+      const slider      = document.getElementById('time-slider');
+      const label       = document.getElementById('time-label');
+      const playBtn     = document.getElementById('play-btn');
+      const speedSelect = document.getElementById('speed-select');
+      const hideBtn     = document.getElementById('hide-slider-btn');
+      const showBtn     = document.getElementById('show-slider-btn');
+      const container   = document.getElementById('time-slider-container');
+
+      slider.max = times.length - 1;
+
+      slider.addEventListener('input', () => {
+        const idx = +slider.value;
+        const cutoff = times[idx];
+        label.textContent = new Date(cutoff).toLocaleDateString();
+        const filtered = allRoutes.features.filter(f => {
+          const m = indexData.find(a=>a.activityId===f.properties.activityId);
+          return m && new Date(m.start_time).getTime() <= cutoff;
+        });
+        segmentsLayer.clearLayers();
+        segmentsLayer.addData(filtered);
+        if (filtered.length) {
+          map.fitBounds(L.geoJSON({type:'FeatureCollection',features:filtered}).getBounds(),
+                       {padding:[20,20]});
+        }
+      });
+
+      playBtn.addEventListener('click', () => {
+        if (playInterval) {
+          clearInterval(playInterval);
+          playInterval = null;
+          playBtn.textContent='▶️';
+        } else {
+          playBtn.textContent='⏸️';
+          const delay = +speedSelect.value;
+          playInterval = setInterval(()=>{
+            let v=+slider.value;
+            if (v<+slider.max) {
+              slider.value=++v;
+              slider.dispatchEvent(new Event('input'));
+            } else {
+              clearInterval(playInterval);
+              playInterval=null;
+              playBtn.textContent='▶️';
+            }
+          }, delay);
+        }
+      });
+
+      hideBtn.addEventListener('click', () => {
+        container.style.display='none';
+        showBtn.style.display='block';
+      });
+      showBtn.addEventListener('click', () => {
+        container.style.display='flex';
+        showBtn.style.display='none';
+      });
+
+      // 6) Proximity-click to open panel
+      map.on('click', e => {
+        const pt = turf.point([e.latlng.lng,e.latlng.lat]);
+        const buf= turf.buffer(pt,5,{units:'meters'});
+        const ids=[...new Set(
+          allRoutes.features
+            .filter(f=>turf.booleanIntersects(buf,turf.lineString(f.geometry.coordinates)))
+            .map(f=>f.properties.activityId)
+        )];
+        if (ids.length) {
+          const acts=ids.map(i=>indexData.find(a=>a.activityId===i)).filter(a=>a);
+          showActivitiesList(acts);
+        }
+      });
+
+    }).catch(console.error);
+
+    // Panel functions
+    function togglePanel(open){
+      document.getElementById('panel').classList.toggle('open', open);
+    }
+    function showActivitiesList(list){
+      const c=document.getElementById('activity-list');
+      c.innerHTML='';
+      list.forEach(a=>{
+        const date=new Date(a.start_time).toLocaleDateString();
+        const km=(a.distance_m/1000).toFixed(1);
+        const div=document.createElement('div');
+        div.className='activity-item';
+        div.innerHTML=`<h3>${date} — ${a.sport}</h3>
+                       <p>Dist: ${km} km · Dur: ${Math.floor(a.duration_s/60)}m</p>`;
+        div.onclick=()=>showActivityDetails(a.activityId);
+        c.appendChild(div);
+      });
+      togglePanel(true);
+    }
+    function showActivityDetails(id){
+      const feat=allRoutes.features.find(f=>f.properties.activityId===id);
+      const act =indexData.find(a=>a.activityId===id);
+      if(!feat||!act)return;
+      segmentsLayer.clearLayers();
+      segmentsLayer.addData(feat);
+      map.fitBounds(L.geoJSON(feat).getBounds(),{padding:[20,20]});
+      const c=document.getElementById('activity-list');
+      c.innerHTML=`
+        <div class="activity-item">
+          <h3>${new Date(act.start_time).toLocaleString()}</h3>
+          <p><strong>Sport:</strong> ${act.sport}</p>
+          <p><strong>Distance:</strong> ${(act.distance_m/1000).toFixed(1)} km</p>
+          <p><strong>Duration:</strong> ${Math.floor(act.duration_s/60)}m ${Math.round(act.duration_s%60)}s</p>
+          <p><strong>Avg HR:</strong> ${act.avg_hr||'–'} bpm</p>
+          <p><strong>Max HR:</strong> ${act.max_hr||'–'} bpm</p>
+          <p><strong>Pace:</strong>${
+            act.avg_pace_s
+              ? ' '+Math.floor(act.avg_pace_s/60)+':' +
+                String(Math.round(act.avg_pace_s%60)).padStart(2,'0')+'/km'
+              : ' –'
+          }</p>
+          <p><strong>Elev Gain:</strong> ${act.elevation_gain_m||'–'} m</p>
+          <p><strong>Cadence:</strong> ${act.cadence||'–'} spm</p>
+          <p><strong>Calories:</strong> ${act.calories||'–'} kcal</p>
+        </div>
+        <button id="show-all-btn">Show All Routes</button>
+      `;
+      document.getElementById('show-all-btn').onclick=showAllRoutes;
+      togglePanel(true);
+    }
+    function showAllRoutes(){
+      segmentsLayer.clearLayers();
+      segmentsLayer.addData(allRoutes);
+      map.fitBounds(initialBounds,{padding:[20,20]});
+      togglePanel(false);
+    }
+  </script>
+</body>
+</html>
